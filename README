@@ -31,6 +31,12 @@ under the same terms as Perl itself.
 
 Revision History
 
+2002-08-14: v0.14
+- $args->{fixed} logic was broken.
+- Removed $args->{break} option. It violates the RFC, and after fiddling
+  with it, I think such functionality should be implemented by the user
+  agent when displaying text to the user.
+
 2002-08-13: v0.13
 - Increased version to 0.13 because CPAN's being stubborn.
 - $OPT_LENGTH was being used by mistake instead of $args->{opt_length}.

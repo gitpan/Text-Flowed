@@ -3,7 +3,7 @@
 
 package Text::Flowed;
 
-$VERSION = '0.13';
+$VERSION = '0.14';
 
 require Exporter;
 @ISA = qw(Exporter);
@@ -11,7 +11,6 @@ require Exporter;
 @EXPORT_OK = qw(reformat quote quote_fixed);
 
 use strict;
-use POSIX qw(floor);
 use vars qw($MAX_LENGTH $OPT_LENGTH);
 
 # MAX_LENGTH: This is the maximum length that a line is allowed to be
@@ -46,8 +45,8 @@ sub reformat {
 		$line = _unquote($line);
 
 		# Should we interpret this line as flowed?
-		unless (!$args->{fixed} ||
-		        $args->{fixed} == 1 && !$num_quotes) {
+		if (!$args->{fixed} ||
+		    ($args->{fixed} == 1 && $num_quotes)) {
 			$line = _unstuff($line);
 			# While line is flowed, and there is a next line, and the
 			# next line has the same quote depth
@@ -85,27 +84,16 @@ sub reformat {
 					last;
 				} elsif ($line =~ /^(.{$min,$opt1}) (.*)/ ||
 						 $line =~ /^(.{$min,$max1}) (.*)/ ||
-				         !$args->{break} && $line =~ /^(.{$min,})? (.*)/) {
+				         $line =~ /^(.{$min,})? (.*)/) {
 					# 1. Try to find a string as long as opt_length.
 					# 2. Try to find a string as long as max_length.
-					# 3. If we can't break it, take the first word.
+					# 3. Take the first word.
 					push(@output, "$1 ");
 					$line = $2;
 				} else {
 					# One excessively long word left on line
-					unless ($args->{break}) {
-						# Print the word and leave if we can't break it
-						push(@output, $line);
-						last;
-					}
-
-					# Break the word on an even byte in a
-					# sometimes-successful attempt to avoid corrupting
-					# double-byte strings
-					my $max = floor(($args->{opt_length} - $min - 1)/2) * 2
-					          + $min;
-					push(@output, substr($line, 0, $max).' ');
-					$line = substr($line, $max);
+					push(@output, $line);
+					last;
 				}
 			}
 		}
@@ -195,7 +183,6 @@ Text::Flowed - text formatting routines for RFC2646 format=flowed
  print reformat($text, {
      quote => 1,
      fixed => 1,
-     break => 1,
      opt_length => 72,
      max_length => 79
  });
@@ -250,16 +237,6 @@ exceed this length (except perhaps for excessively long words).
 
 If a line exceeds opt_length but does not exceed max_length, it might
 not be rewrapped.
-
-If B<$args-E<gt>{break}> is true, then excessively long words will be
-broken up at C<opt_length> characters (in violation of RFC 2646).
-This is useful in web-based forums where it is desired to avoid long
-words which disrupt the page layout, as well as when quoting
-Chinese/Japanese/Korean text (which has no spaces). This option should
-not be used on strings in international encodings that Perl is not aware
-of, or else it may corrupt them. (Since it only breaks words on an even
-number of characters, it will correctly break strings that contain
-nothing but double-byte characters.)
 
 =item B<quote>($text)
 
