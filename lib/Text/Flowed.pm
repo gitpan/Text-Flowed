@@ -3,7 +3,7 @@
 
 package Text::Flowed;
 
-$VERSION = '0.1';
+$VERSION = '0.02';
 
 require Exporter;
 @ISA = qw(Exporter);
@@ -11,7 +11,7 @@ require Exporter;
 @EXPORT_OK = qw(reformat quote quote_fixed);
 
 use strict;
-
+use POSIX qw(floor);
 use vars qw($MAX_LENGTH $OPT_LENGTH);
 
 # MAX_LENGTH: This is the maximum length that a line is allowed to be
@@ -29,9 +29,13 @@ $OPT_LENGTH = 72;
 #
 # $args->{quote}: Add a level of quoting to the beginning of each line.
 # $args->{fixed}: Interpret unquoted lines as format=fixed.
+# $args->{max_length}: The maximum length of any line.
+# $args->{opt_length}: The maximum length of wrapped lines.
 sub reformat {
 	my @input = split("\n", $_[0]);
 	my $args = $_[1];
+	$args->{max_length} ||= $MAX_LENGTH;
+	$args->{opt_length} ||= $OPT_LENGTH;
 	my @output = ();
 
 	# Process message line by line
@@ -42,17 +46,17 @@ sub reformat {
 		$line = _unquote($line);
 
 		# Remove space-stuffing if necessary
-		_unstuff(\$line) unless $args->{fixed};
+		$line = _unstuff($line) unless $args->{fixed} && !$num_quotes;
 
 		# While line is flowed, join subsequent lines with flowed text
 		unless ($args->{fixed} && !$num_quotes) {
 			while (_flowed($line) && @input &&
 			       _num_quotes($input[0]) == $num_quotes) {
-				$line .= _unquote(shift(@input));
+				$line .= _unstuff(_unquote(shift(@input)));
 			}
 		}
 		# Ensure line is fixed, since we joined all flowed lines
-		_trim(\$line);
+		$line = _trim($line);
 
 		# Increment quote depth if we're quoting
 		$num_quotes++ if $args->{quote};
@@ -60,30 +64,39 @@ sub reformat {
 		if (!$line) {
 			# Line is empty
 			push(@output, '>' x $num_quotes);
-		} elsif (length($line) + $num_quotes <= $MAX_LENGTH - 1) {
+		} elsif (length($line) + $num_quotes <= $args->{max_length} - 1) {
 			# Line does not require rewrapping
-			_stuff(\$line, $num_quotes);
-			push(@output, '>' x $num_quotes . $line);
+			push(@output, '>' x $num_quotes . _stuff($line, $num_quotes));
 		} else {
 			# Rewrap this paragraph
 			while ($line) {
 				# Stuff and re-quote the line
-				_stuff(\$line, $num_quotes);
-				$line = '>' x $num_quotes . $line;
+				$line = '>' x $num_quotes . _stuff($line, $num_quotes);
 				my $min = $num_quotes + 1;
 				if (length($line) <= $OPT_LENGTH) {
 					# Remaining section of line is short enough
 					push(@output, $line);
 					last;
-				} elsif ($line =~ /^(.{$min,$OPT_LENGTH}) (.*)/ ||
-				         $line =~ /^(.{$min,})? (.*)/) {
+				} elsif ($line =~ /^(.{$min,$args->{opt_length}}) (.*)/ ||
+				         (!$args->{break} && $line =~ /^(.{$min,})? (.*)/)) {
 					# Further wrapping required
 					push(@output, "$1 ");
 					$line = $2;
 				} else {
 					# One excessively long word left on line
-					push(@output, $line);
-					last;
+					unless ($args->{break}) {
+						# Print the word and leave
+						push(@output, $line);
+						last;
+					}
+
+					# Break the word on an even byte in a
+					# sometimes-successful attempt to avoid corrupting
+					# double-byte strings
+					my $max = floor(($args->{opt_length} - $min)/2) * 2
+					          + $min;
+					push(@output, substr($line, 0, $max).' ');
+					$line = substr($line, $max);
 				}
 			}
 		}
@@ -107,7 +120,7 @@ sub quote_fixed {
 # _num_quotes(<text>)
 # Returns the number of leading '>' characters in <text>.
 sub _num_quotes {
-	$_[0] =~ /^(>+)/;
+	$_[0] =~ /^(>*)/;
 	return length($1);
 }
 
@@ -132,8 +145,9 @@ sub _flowed {
 # _trim(<text>)
 # Removes all trailing ' ' characters from <text>.
 sub _trim {
-	my $ref = shift;
-	$$ref =~ s/ +$//g;
+	$_ = shift;
+	$_ =~ s/ +$//g;
+	return $_;
 }
 
 # _stuff(<text>, <num_quotes>)
@@ -141,18 +155,20 @@ sub _trim {
 # quote depth is non-zero (for aesthetic reasons so that there is a
 # space after the ">").
 sub _stuff {
-	my ($ref, $num_quotes) = @_;
-	if ($$ref =~ /^ / || $$ref =~ /^>/ || $$ref =~ /^From / ||
+	my ($text, $num_quotes) = @_;
+	if ($text =~ /^ / || $text =~ /^>/ || $text =~ /^From / ||
 		$num_quotes > 0) {
-		$$ref = " $$ref";
+		return " $text";
 	}
+	return $text;
 }
 
 # _unstuff(<text>)
 # Un-space-stuffs <text>.
 sub _unstuff {
-	my $ref = shift;
-	$$ref =~ s/^ //;
+	$_ = shift;
+	$_ =~ s/^ //;
+	return $_;
 }
 
 1;
@@ -167,9 +183,16 @@ Text::Flowed - text formatting routines for RFC2646 format=flowed
 
  use Text::Flowed qw(reformat quote quote_fixed);
 
- print reformat($text, \%args); # Reformat some format=flowed text
- print quote($text);
- print quote_fixed($text);
+ print reformat($text, {
+     quote => 1,
+     fixed => 1,
+     break => 1,
+     opt_length => 72,
+     max_length => 79
+ });
+
+ print quote($text);      # alias for quote => 1
+ print quote_fixed(text); # alias for quote => 1, fixed => 1
 
 =head1 DESCRIPTION
 
@@ -195,14 +218,35 @@ lines being split or combined as necessary.
 
     my $formatted_text = reformat($text, \%args);
 
-If $args->{quote} is true, a level of quoting will be added to the
-beginning of every line.
+If B<$args-E<gt>{quote}> is true, a level of quoting will be added to
+the beginning of every line.
 
-If $args->{fixed} is true, unquoted lines in $text will not be
+If B<$args-E<gt>{fixed}> is true, unquoted lines in $text will not be
 interpreted as format=flowed (with respect to parsing space-stuffing and
 flowed lines). This is useful for processing messages posted in
 web-based forums, which are not format=flowed, but preserve paragraph
 structure due to paragraphs not having internal line breaks.
+
+If B<$args-E<gt>{break}> is true, then excessively long words will be
+broken up at $args->{opt_length} characters (in violation of RFC 2646).
+This is useful in web-based forums where it is desired to avoid long
+words which disrupt the page layout, as well as the text is in
+Chinese/Japanese/Korean (which has no spaces). This option should not be
+used on strings in international encodings that Perl is not aware of, as
+it may corrupt them.
+
+B<$args-E<gt>{max_length}> (default 79) is the maximum length of line
+that reformat() or quote() will generate. Any lines longer than this
+length will be rewrapped, unless there is an excessively long word that
+makes this impossible, in which case it will generate a long line
+containing only that word.
+
+B<$args-E<gt>{opt_length}> (default 72) is the optimum line length. When
+reformat() or quote() rewraps a paragraph, the resulting lines will not
+exceed this length (except perhaps for excessively long words).
+
+If a line exceeds opt_length but does not exceed max_length, it might
+not be rewrapped.
 
 =item B<quote>($text)
 
@@ -215,27 +259,7 @@ quote($text) is an alias for reformat($text, {quote => 1}).
 quote_fixed($text) is an alias for reformat($text, {quote => 1, fixed =>
 1}).
 
-	my $quoted_text = quote_fixed($text);
-
-=item B<$MAX_LENGTH>
-
-$MAX_LENGTH is the maximum length of line that reformat() or quote()
-will generate. Any lines longer than this length will be rewrapped,
-unless there is an excessively long word that makes this impossible, in
-which case it will generate a long line containing only that word.
-
-    $Text::Format::MAX_LENGTH = 79; # default
-
-=item B<$OPT_LENGTH>
-
-$OPT_LENGTH is the optimum line length. When reformat() or quote()
-rewraps a paragraph, the resulting lines will not exceed this length
-(except perhaps for excessively long words).
-
-If a line exceeds $OPT_LENGTH but does not exceed $MAX_LENGTH, it might
-not be rewrapped.
-
-    $Text::Format::OPT_LENGTH = 72; # default
+    my $quoted_text = quote_fixed($text);
 
 =back
 
