@@ -31,7 +31,16 @@ under the same terms as Perl itself.
 
 Revision History
 
-2002-08-11: v0.2
+2002-08-13: v0.13
+- Increased version to 0.13 because CPAN's being stubborn.
+- $OPT_LENGTH was being used by mistake instead of $args->{opt_length}.
+- $args->{break} was breaking words longer than opt_length but shorter
+  than max_length.
+- $args->{fixed} == 2 makes all lines interpreted as format=fixed.
+- Off-by-one bug: Lines could be longer than opt_length/max_length by
+  one character.
+
+2002-08-11: v0.02
 - reformat($text, {fixed => 1}) was incorrectly interpreting all lines
   as fixed, rather than just unquoted lines as fixed.
 - reformat() was not unstuffing joined lines.

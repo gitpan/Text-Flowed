@@ -3,7 +3,7 @@
 
 package Text::Flowed;
 
-$VERSION = '0.02';
+$VERSION = '0.13';
 
 require Exporter;
 @ISA = qw(Exporter);
@@ -28,7 +28,7 @@ $OPT_LENGTH = 72;
 # in RFC 2646.
 #
 # $args->{quote}: Add a level of quoting to the beginning of each line.
-# $args->{fixed}: Interpret unquoted lines as format=fixed.
+# $args->{fixed}: Interpret unquoted/all lines as format=fixed.
 # $args->{max_length}: The maximum length of any line.
 # $args->{opt_length}: The maximum length of wrapped lines.
 sub reformat {
@@ -45,13 +45,15 @@ sub reformat {
 		my $num_quotes = _num_quotes($line);
 		$line = _unquote($line);
 
-		# Remove space-stuffing if necessary
-		$line = _unstuff($line) unless $args->{fixed} && !$num_quotes;
-
-		# While line is flowed, join subsequent lines with flowed text
-		unless ($args->{fixed} && !$num_quotes) {
+		# Should we interpret this line as flowed?
+		unless (!$args->{fixed} ||
+		        $args->{fixed} == 1 && !$num_quotes) {
+			$line = _unstuff($line);
+			# While line is flowed, and there is a next line, and the
+			# next line has the same quote depth
 			while (_flowed($line) && @input &&
 			       _num_quotes($input[0]) == $num_quotes) {
+				# Join the next line
 				$line .= _unstuff(_unquote(shift(@input)));
 			}
 		}
@@ -72,20 +74,27 @@ sub reformat {
 			while ($line) {
 				# Stuff and re-quote the line
 				$line = '>' x $num_quotes . _stuff($line, $num_quotes);
+
+				# Set variables used in regexps
 				my $min = $num_quotes + 1;
-				if (length($line) <= $OPT_LENGTH) {
+				my $opt1 = $args->{opt_length} - 1;
+				my $max1 = $args->{max_length} - 1;
+				if (length($line) <= $args->{opt_length}) {
 					# Remaining section of line is short enough
 					push(@output, $line);
 					last;
-				} elsif ($line =~ /^(.{$min,$args->{opt_length}}) (.*)/ ||
-				         (!$args->{break} && $line =~ /^(.{$min,})? (.*)/)) {
-					# Further wrapping required
+				} elsif ($line =~ /^(.{$min,$opt1}) (.*)/ ||
+						 $line =~ /^(.{$min,$max1}) (.*)/ ||
+				         !$args->{break} && $line =~ /^(.{$min,})? (.*)/) {
+					# 1. Try to find a string as long as opt_length.
+					# 2. Try to find a string as long as max_length.
+					# 3. If we can't break it, take the first word.
 					push(@output, "$1 ");
 					$line = $2;
 				} else {
 					# One excessively long word left on line
 					unless ($args->{break}) {
-						# Print the word and leave
+						# Print the word and leave if we can't break it
 						push(@output, $line);
 						last;
 					}
@@ -93,7 +102,7 @@ sub reformat {
 					# Break the word on an even byte in a
 					# sometimes-successful attempt to avoid corrupting
 					# double-byte strings
-					my $max = floor(($args->{opt_length} - $min)/2) * 2
+					my $max = floor(($args->{opt_length} - $min - 1)/2) * 2
 					          + $min;
 					push(@output, substr($line, 0, $max).' ');
 					$line = substr($line, $max);
@@ -164,7 +173,7 @@ sub _stuff {
 }
 
 # _unstuff(<text>)
-# Un-space-stuffs <text>.
+# If <text> starts with a space, remove it.
 sub _unstuff {
 	$_ = shift;
 	$_ =~ s/^ //;
@@ -221,19 +230,13 @@ lines being split or combined as necessary.
 If B<$args-E<gt>{quote}> is true, a level of quoting will be added to
 the beginning of every line.
 
-If B<$args-E<gt>{fixed}> is true, unquoted lines in $text will not be
-interpreted as format=flowed (with respect to parsing space-stuffing and
-flowed lines). This is useful for processing messages posted in
-web-based forums, which are not format=flowed, but preserve paragraph
-structure due to paragraphs not having internal line breaks.
-
-If B<$args-E<gt>{break}> is true, then excessively long words will be
-broken up at $args->{opt_length} characters (in violation of RFC 2646).
-This is useful in web-based forums where it is desired to avoid long
-words which disrupt the page layout, as well as the text is in
-Chinese/Japanese/Korean (which has no spaces). This option should not be
-used on strings in international encodings that Perl is not aware of, as
-it may corrupt them.
+If B<$args-E<gt>{fixed}> is true, unquoted lines in $text will be
+interpreted as format=fixed (i.e. leading spaces are interpreted
+literally, and lines will not be joined together). (Set it to 2 to make
+all lines interpreted as format=fixed.) This is useful for processing
+messages posted in web-based forums, which are not format=flowed, but
+preserve paragraph structure due to paragraphs not having internal line
+breaks.
 
 B<$args-E<gt>{max_length}> (default 79) is the maximum length of line
 that reformat() or quote() will generate. Any lines longer than this
@@ -247,6 +250,16 @@ exceed this length (except perhaps for excessively long words).
 
 If a line exceeds opt_length but does not exceed max_length, it might
 not be rewrapped.
+
+If B<$args-E<gt>{break}> is true, then excessively long words will be
+broken up at C<opt_length> characters (in violation of RFC 2646).
+This is useful in web-based forums where it is desired to avoid long
+words which disrupt the page layout, as well as when quoting
+Chinese/Japanese/Korean text (which has no spaces). This option should
+not be used on strings in international encodings that Perl is not aware
+of, or else it may corrupt them. (Since it only breaks words on an even
+number of characters, it will correctly break strings that contain
+nothing but double-byte characters.)
 
 =item B<quote>($text)
 
